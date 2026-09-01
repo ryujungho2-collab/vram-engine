@@ -18,16 +18,25 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class CrossDomainIsomorphismEngine:
     def __init__(self, sinkhorn_iters: int = 20, tau: float = 0.05):
+        if tau <= 0:
+            raise ValueError("tau must be greater than zero")
+        if sinkhorn_iters < 0:
+            raise ValueError("sinkhorn_iters must be non-negative")
         self.sinkhorn_iters = sinkhorn_iters
         self.tau = tau
 
     def compute_laplacian_spectrum(self, adj: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        self._validate_adjacency(adj, "adj")
         deg = torch.diag(adj.sum(dim=1))
         laplacian = deg - adj
         e_vals, e_vecs = torch.linalg.eigh(laplacian)
         return e_vals, e_vecs
 
     def match_domains(self, adj_a: torch.Tensor, labels_a: List[str], adj_b: torch.Tensor, labels_b: List[str]) -> List[Dict[str, Any]]:
+        self._validate_adjacency(adj_a, "adj_a")
+        self._validate_adjacency(adj_b, "adj_b")
+        if len(labels_a) != adj_a.size(0) or len(labels_b) != adj_b.size(0):
+            raise ValueError("each labels list must match its adjacency size")
         _, e_vecs_a = self.compute_laplacian_spectrum(adj_a.to(device))
         _, e_vecs_b = self.compute_laplacian_spectrum(adj_b.to(device))
 
@@ -54,3 +63,12 @@ class CrossDomainIsomorphismEngine:
                     "isomorphism_confidence": round(confidence, 4)
                 })
         return analogies
+
+    @staticmethod
+    def _validate_adjacency(adj: torch.Tensor, name: str) -> None:
+        if not isinstance(adj, torch.Tensor):
+            raise TypeError(f"{name} must be a torch.Tensor")
+        if adj.ndim != 2 or adj.size(0) != adj.size(1):
+            raise ValueError(f"{name} must be a square matrix")
+        if not torch.isfinite(adj).all().item():
+            raise ValueError(f"{name} must not contain NaN or Inf")

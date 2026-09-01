@@ -29,6 +29,10 @@ class SelfHealingCircuitBreaker:
     def update_snapshot(self, state_tensor: torch.Tensor, entropy: float):
         self.last_stable_snapshot = SystemSnapshot(state_tensor, entropy)
 
+    def reset_transient_state(self) -> None:
+        """Start a new request without carrying a prior request's rejection streak."""
+        self.hallucination_streak = 0
+
     def inspect_and_heal(self, current_entropy: float, prev_entropy: float, is_hallucination: bool, current_state: torch.Tensor) -> Tuple[torch.Tensor, str]:
         delta_h = current_entropy - prev_entropy
         self.hallucination_streak = (self.hallucination_streak + 1) if is_hallucination else 0

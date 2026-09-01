@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import scrolledtext
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import networkx as nx
@@ -11,6 +11,8 @@ STATUS_COLORS = {
     "WARNING_PURGE": "#ffaa00",
     "CRITICAL_ROLLBACK": "#ff0044",
 }
+MAX_ENTROPY_HISTORY = 200
+MAX_LOG_LINES = 200
 
 
 class AutonomousGUIDashboard:
@@ -33,6 +35,7 @@ class AutonomousGUIDashboard:
         self.root.configure(bg="#1e1e1e")
         self.step_count = 0
         self.entropy_history = []
+        self._after_id = None
 
         self.iso_engine = iso_engine
         self.verifier = verifier
@@ -55,7 +58,8 @@ class AutonomousGUIDashboard:
             self.circuit_breaker.update_snapshot(self.state_adj, self.prev_entropy)
 
         self._build_layout()
-        self.root.after(1000, self.update_loop)
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+        self._schedule_update()
 
     def _init_adjacency(self, n):
         adj = torch.eye(n)
@@ -96,7 +100,7 @@ class AutonomousGUIDashboard:
 
         self._redraw_graph()
         self.canvas.draw()
-        self.root.after(1000, self.update_loop)
+        self._schedule_update()
 
     def _step_retriever_mode(self):
         query = self.demo_queries[self._query_cursor % len(self.demo_queries)]
@@ -108,16 +112,14 @@ class AutonomousGUIDashboard:
         status = result["engine_status"]
         top = result["results"][0] if result["results"] else None
 
-        self.entropy_history.append(entropy)
+        self._append_entropy(entropy)
         self.status_label.config(text=f"STATUS: {status}", fg=STATUS_COLORS.get(status, "#ffffff"))
 
         top_desc = f"{top['document'][:24]}... (hybrid={top['hybrid_score']:.2f})" if top else "N/A"
-        self.log_text.insert(
-            tk.END,
+        self._append_log(
             f"[{time.strftime('%H:%M:%S')}] Q: '{query}' -> {top_desc} | "
             f"H(G): {entropy:.4f} | {status}\n"
         )
-        self.log_text.see(tk.END)
         self._draw_entropy_plot()
 
     def _step_standalone_mode(self):
@@ -135,15 +137,13 @@ class AutonomousGUIDashboard:
         self.state_adj = healed_state
         self.prev_entropy = current_entropy
 
-        self.entropy_history.append(current_entropy)
+        self._append_entropy(current_entropy)
         self.status_label.config(text=f"STATUS: {status}", fg=STATUS_COLORS.get(status, "#ffffff"))
 
-        self.log_text.insert(
-            tk.END,
+        self._append_log(
             f"[{time.strftime('%H:%M:%S')}] Step #{self.step_count:03d} | "
             f"H(G): {current_entropy:.4f} | {status} | {log_msg}\n"
         )
-        self.log_text.see(tk.END)
         self._draw_entropy_plot()
 
     def _redraw_graph(self):
@@ -161,3 +161,25 @@ class AutonomousGUIDashboard:
         self.ax_entropy.set_facecolor('#1e1e1e')
         self.ax_entropy.set_title("Entropy H(G)", color='#00ffcc')
         self.ax_entropy.plot(self.entropy_history[-20:], color='#ff007f', marker='o')
+
+    def _append_entropy(self, entropy: float) -> None:
+        self.entropy_history.append(entropy)
+        if len(self.entropy_history) > MAX_ENTROPY_HISTORY:
+            del self.entropy_history[:-MAX_ENTROPY_HISTORY]
+
+    def _append_log(self, message: str) -> None:
+        self.log_text.insert(tk.END, message)
+        line_count = int(self.log_text.index("end-1c").split(".")[0])
+        if line_count > MAX_LOG_LINES:
+            self.log_text.delete("1.0", f"{line_count - MAX_LOG_LINES + 1}.0")
+        self.log_text.see(tk.END)
+
+    def _schedule_update(self) -> None:
+        self._after_id = self.root.after(1000, self.update_loop)
+
+    def close(self) -> None:
+        if self._after_id is not None:
+            self.root.after_cancel(self._after_id)
+            self._after_id = None
+        plt.close(self.fig)
+        self.root.destroy()

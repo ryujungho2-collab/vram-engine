@@ -81,7 +81,7 @@ class LegacyRetrieverAdapter:
 
     @property
     def prev_entropy(self) -> float:
-        return self.agent._prev_entropy if self.agent else 0.0
+        return self.agent.last_entropy if self.agent else 0.0
 
     def index(self, documents: List[str]) -> None:
         self.document_store.add_many(documents)

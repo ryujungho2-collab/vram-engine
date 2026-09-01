@@ -41,3 +41,23 @@ def test_simple_bm25_empty_query_returns_zero_scores():
     bm25 = SimpleBM25([["a", "b"], ["c", "d"]])
     scores = bm25.get_scores([])
     assert scores == [0.0, 0.0]
+
+
+def test_bm25_reindexes_when_document_store_changes_during_hybrid_retrieval():
+    from vram_engine.core.graph_store import GraphStore
+    from vram_engine.graph.builder import build_similarity_graph
+    from vram_engine.graph.isomorphism import CrossDomainIsomorphismEngine
+    from vram_engine.retrieval.hybrid import HybridRetriever
+    from vram_engine.retrieval.spectral import SpectralRetriever
+
+    ds = DocumentStore()
+    ds.add_many(["quantum mechanics", "kimchi recipe"])
+    bm25 = BM25Retriever()
+    bm25.index(ds.all())
+    ds.add("quantum wave collapse")
+    graph_store = GraphStore(build_similarity_graph(ds.all()))
+    hybrid = HybridRetriever(bm25, SpectralRetriever(CrossDomainIsomorphismEngine()))
+
+    candidates = hybrid.retrieve("quantum collapse", ds, graph_store, top_k=3)
+    assert len(candidates) == 3
+    assert candidates[0].doc_id == 2

@@ -57,12 +57,23 @@ class BM25Retriever:
         self.k1 = k1
         self.b = b
         self._bm25: Optional[SimpleBM25] = None
+        self._indexed_signature = None
 
     def index(self, documents: List[Document]) -> None:
         corpus_tokens = [doc.tokens for doc in documents]
         self._bm25 = SimpleBM25(corpus_tokens, k1=self.k1, b=self.b)
+        self._indexed_signature = self._signature(documents)
+
+    def ensure_index(self, documents: List[Document]) -> None:
+        """Rebuild the snapshot index when the supplied document set changed."""
+        if self._bm25 is None or self._indexed_signature != self._signature(documents):
+            self.index(documents)
 
     def score(self, query_text: str) -> List[float]:
         if self._bm25 is None:
             raise RuntimeError("먼저 index(documents)를 호출하세요.")
         return self._bm25.get_scores(hybrid_tokenize(query_text))
+
+    @staticmethod
+    def _signature(documents: List[Document]):
+        return tuple((doc.doc_id, doc.text, tuple(doc.tokens)) for doc in documents)

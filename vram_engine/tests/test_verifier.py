@@ -1,4 +1,5 @@
 import torch
+import pytest
 
 from vram_engine.graph.verifier import AntiHallucinationVerifier
 
@@ -32,3 +33,15 @@ def test_verify_candidates_returns_one_result_per_candidate():
     results = verifier.verify_candidates(adj, query_node_idx=0, candidate_doc_ids=[1, 2])
     assert len(results) == 2
     assert {r.doc_id for r in results} == {1, 2}
+
+
+@pytest.mark.parametrize("node", [-1, 4])
+def test_verify_hypothesis_rejects_out_of_range_node(node):
+    verifier = AntiHallucinationVerifier()
+    with pytest.raises(ValueError, match="node_v"):
+        verifier.verify_hypothesis(torch.eye(4), 0, node)
+
+
+def test_verifier_rejects_non_square_adjacency():
+    with pytest.raises(ValueError, match="square"):
+        AntiHallucinationVerifier().calc_entropy(torch.ones(2, 3))

@@ -27,6 +27,7 @@ graph_store.replace()로 실제 반영하는 건 Agent다. 즉 GraphStore
   판정 알고리즘 자체는 전혀 건드리지 않는다 — 비교 대상의 스케일만
   맞춘 것이다.
 """
+from threading import RLock
 from typing import List, Optional, Tuple
 
 from vram_engine.agent.planner import Planner
@@ -35,7 +36,6 @@ from vram_engine.core.document_store import DocumentStore, hybrid_tokenize
 from vram_engine.core.graph_store import GraphStore
 from vram_engine.core.types import AgentStepResult, EngineStatus, FinalAnswer, RetrievalPlan
 from vram_engine.graph.builder import build_query_edge_weights
-from vram_engine.graph.isomorphism import device as ISO_DEVICE
 from vram_engine.graph.verifier import AntiHallucinationVerifier
 from vram_engine.retrieval.hybrid import HybridRetriever
 from vram_engine.safety.circuit_breaker import SelfHealingCircuitBreaker
@@ -79,41 +79,50 @@ class RetrievalAgent:
         self.synthesizer = synthesizer
         self.default_strategy = default_strategy or IncreaseSpectralWeightStrategy()
         self.max_retries = max_retries
+        self._run_lock = RLock()
 
-        # 질의 노드가 없는 "중립" 증강 그래프(엣지 전부 0)의 엔트로피를
-        # 초기 비교 기준으로 사용한다 (위 docstring 참고).
-        n = len(document_store)
-        neutral_aug = graph_store.augmented_with([0.0] * n).to(ISO_DEVICE)
-        self._prev_entropy = float(verifier.calc_entropy(neutral_aug).item())
-        circuit_breaker.update_snapshot(graph_store.current(), self._prev_entropy)
+        self._last_entropy = self._neutral_entropy()
+        circuit_breaker.update_snapshot(graph_store.current(), self._last_entropy)
+
+    @property
+    def last_entropy(self) -> float:
+        """Most recently completed request entropy for monitoring clients."""
+        return self._last_entropy
 
     def run(self, query_text: str) -> Tuple[FinalAnswer, List[AgentStepResult]]:
-        plan = self.planner.initial_plan(query_text)
-        trace: List[AgentStepResult] = []
-        retries = 0
+        # Agent, circuit breaker, and graph store are intentionally shared by the
+        # dashboard. Serialising one complete run keeps that shared safety state
+        # coherent while keeping per-request entropy local.
+        with self._run_lock:
+            prev_entropy = self._neutral_entropy()
+            self.circuit_breaker.reset_transient_state()
+            self.circuit_breaker.update_snapshot(self.graph_store.current(), prev_entropy)
+            plan = self.planner.initial_plan(query_text)
+            trace: List[AgentStepResult] = []
+            retries = 0
 
-        while True:
-            step = self._run_step(plan)
-            trace.append(step)
-            if not self.planner.should_retry(step.confidence, retries, self.max_retries):
-                break
-            retries += 1
-            plan = self.planner.next_plan(plan, self.default_strategy)
+            while True:
+                step, prev_entropy = self._run_step(plan, prev_entropy)
+                trace.append(step)
+                if not self.planner.should_retry(step.confidence, retries, self.max_retries):
+                    break
+                retries += 1
+                plan = self.planner.next_plan(plan, self.default_strategy)
 
-        final_step = trace[-1]
-        final_answer = self.synthesizer.synthesize(
-            query_text=query_text,
-            candidates=final_step.candidates,
-            verifications=final_step.verifications,
-            engine_status=final_step.engine_status,
-            retries=retries,
-        )
-        return final_answer, trace
+            final_step = trace[-1]
+            self._last_entropy = final_step.engine_status.entropy
+            final_answer = self.synthesizer.synthesize(
+                query_text=query_text,
+                candidates=final_step.candidates,
+                verifications=final_step.verifications,
+                engine_status=final_step.engine_status,
+                retries=retries,
+            )
+            return final_answer, trace
 
-    def _run_step(self, plan: RetrievalPlan) -> AgentStepResult:
-        self.hybrid_retriever.alpha = plan.alpha
+    def _run_step(self, plan: RetrievalPlan, prev_entropy: float) -> Tuple[AgentStepResult, float]:
         candidates = self.hybrid_retriever.retrieve(
-            plan.query_text, self.document_store, self.graph_store, top_k=plan.top_k
+            plan.query_text, self.document_store, self.graph_store, top_k=plan.top_k, alpha=plan.alpha
         )
 
         n = len(self.document_store)
@@ -127,14 +136,13 @@ class RetrievalAgent:
         # 2. 실제 유사도가 반영된 증강 그래프의 엔트로피로 circuit breaker 판단
         query_tokens = hybrid_tokenize(plan.query_text)
         edge_weights = build_query_edge_weights(query_tokens, documents)
-        aug_full = self.graph_store.augmented_with(edge_weights).to(ISO_DEVICE)
+        aug_full = self.graph_store.augmented_with(edge_weights)
         current_entropy = float(self.verifier.calc_entropy(aug_full).item())
 
         any_hallucination = not all(v.verified for v in verifications)
         healed_state, status = self.circuit_breaker.inspect_and_heal(
-            current_entropy, self._prev_entropy, any_hallucination, aug_full
+            current_entropy, prev_entropy, any_hallucination, aug_full
         )
-        self._prev_entropy = current_entropy
 
         if status == "CRITICAL_ROLLBACK":
             # 코퍼스 그래프만 마지막 안정 상태로 되돌린다. GraphStore의
@@ -151,4 +159,9 @@ class RetrievalAgent:
             engine_status=engine_status,
         )
         step.confidence = evaluate_confidence(step)
-        return step
+        return step, current_entropy
+
+    def _neutral_entropy(self) -> float:
+        n = len(self.document_store)
+        neutral_aug = self.graph_store.augmented_with([0.0] * n)
+        return float(self.verifier.calc_entropy(neutral_aug).item())

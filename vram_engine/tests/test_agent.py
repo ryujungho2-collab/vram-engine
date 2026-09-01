@@ -12,6 +12,7 @@ from vram_engine.retrieval.hybrid import HybridRetriever
 from vram_engine.retrieval.spectral import SpectralRetriever
 from vram_engine.safety.circuit_breaker import SelfHealingCircuitBreaker
 from vram_engine.synthesis.synthesizer import Synthesizer
+from concurrent.futures import ThreadPoolExecutor
 
 CORPUS = [
     "양자역학에서 파동함수의 붕괴는 관측 시점에 확률적으로 결정된다",
@@ -118,3 +119,21 @@ def test_agent_can_retry_when_confidence_threshold_is_high():
     final, trace = agent.run("양자 확률 붕괴")
     assert len(trace) == 3  # 최초 1회 + 재시도 2회
     assert final.retries == 2
+
+
+def test_agent_retry_does_not_mutate_shared_retriever_alpha():
+    agent, _ = _build_agent(max_retries=1, confidence_threshold=999.0)
+    original_alpha = agent.hybrid_retriever.alpha
+    agent.run("양자 확률 붕괴")
+    assert agent.hybrid_retriever.alpha == original_alpha
+
+
+def test_agent_serializes_concurrent_runs_and_returns_complete_results():
+    agent, _ = _build_agent(max_retries=0)
+    queries = ["양자 확률 붕괴", "김치 요리법", "신경망 확률"]
+    with ThreadPoolExecutor(max_workers=len(queries)) as executor:
+        results = list(executor.map(agent.run, queries))
+
+    assert [final.query_text for final, _ in results] == queries
+    assert all(final.top_documents for final, _ in results)
+    assert agent.hybrid_retriever.alpha == 0.5

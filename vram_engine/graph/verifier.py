@@ -23,10 +23,14 @@ class AntiHallucinationVerifier:
         self.divergence_limit = divergence_limit
 
     def calc_entropy(self, adj: torch.Tensor) -> torch.Tensor:
+        self._validate_adjacency(adj)
         p = F.softmax(adj, dim=-1)
         return -torch.sum(p * torch.log(p + 1e-9)) / adj.size(0)
 
     def verify_hypothesis(self, base_adj: torch.Tensor, node_u: int, node_v: int) -> Tuple[bool, float, str]:
+        self._validate_adjacency(base_adj)
+        self._validate_node_index(node_u, base_adj.size(0), "node_u")
+        self._validate_node_index(node_v, base_adj.size(0), "node_v")
         base_adj = base_adj.to(device)
         h_before = self.calc_entropy(base_adj)
 
@@ -59,3 +63,19 @@ class AntiHallucinationVerifier:
             is_valid, delta_h, log_msg = self.verify_hypothesis(base_adj, query_node_idx, doc_id)
             results.append(VerificationResult(doc_id=doc_id, verified=is_valid, delta_h=delta_h, log_message=log_msg))
         return results
+
+    @staticmethod
+    def _validate_adjacency(adj: torch.Tensor) -> None:
+        if not isinstance(adj, torch.Tensor):
+            raise TypeError("adjacency must be a torch.Tensor")
+        if adj.ndim != 2 or adj.size(0) != adj.size(1):
+            raise ValueError("adjacency must be a square matrix")
+        if not torch.isfinite(adj).all().item():
+            raise ValueError("adjacency must not contain NaN or Inf")
+
+    @staticmethod
+    def _validate_node_index(node: int, size: int, name: str) -> None:
+        if not isinstance(node, int) or isinstance(node, bool):
+            raise TypeError(f"{name} must be an integer")
+        if not 0 <= node < size:
+            raise ValueError(f"{name} must be between 0 and {size - 1}")

@@ -1,21 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "vram-engine"
 version = "0.1.0"
-description = "VRAM Autonomous Intelligence Engine (hybrid BM25+spectral retrieval, agent, safety)"
-requires-python = ">=3.8"
+description = "Graph-based retrieval and verification engine"
+requires-python = ">=3.10"
 dependencies = [
-    "torch>=2.13.0",
-    "matplotlib>=3.5",
-    "networkx>=3.0",
-    "numpy",
+    "torch",
+    "matplotlib",
+    "networkx",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest"]
 
 [tool.pytest.ini_options]
 testpaths = ["vram_engine/tests"]
 
-[build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
+[tool.setuptools.packages.find]
+include = ["vram_engine*"]

@@ -15,7 +15,7 @@
 noise_floor보다 작으면 중립값(0.5)으로 처리해 이 문제를 막는다.
 (원본 hybrid_retriever._minmax와 동일 로직, 값 1e-3 유지)
 """
-from typing import List
+from typing import List, Optional
 
 from vram_engine.core.document_store import DocumentStore
 from vram_engine.core.graph_store import GraphStore
@@ -43,10 +43,21 @@ class HybridRetriever:
         self.alpha = alpha  # BM25:스펙트럴 가중치 (0=스펙트럴만, 1=BM25만)
 
     def retrieve(
-        self, query_text: str, document_store: DocumentStore, graph_store: GraphStore, top_k: int
+        self,
+        query_text: str,
+        document_store: DocumentStore,
+        graph_store: GraphStore,
+        top_k: int,
+        alpha: Optional[float] = None,
     ) -> List[RetrievalCandidate]:
         documents = document_store.all()
+        if top_k < 0:
+            raise ValueError("top_k must be non-negative")
+        effective_alpha = self.alpha if alpha is None else alpha
+        if not 0.0 <= effective_alpha <= 1.0:
+            raise ValueError("alpha must be between 0.0 and 1.0")
 
+        self.bm25.ensure_index(documents)
         bm25_scores = self.bm25.score(query_text)
         spectral_scores = self.spectral.score(query_text, documents, graph_store)
 
@@ -56,7 +67,7 @@ class HybridRetriever:
         candidates = []
         for doc in documents:
             i = doc.doc_id
-            hybrid_score = self.alpha * bm25_norm[i] + (1 - self.alpha) * spectral_norm[i]
+            hybrid_score = effective_alpha * bm25_norm[i] + (1 - effective_alpha) * spectral_norm[i]
             candidates.append(RetrievalCandidate(
                 doc_id=i,
                 bm25_score=bm25_scores[i],
