@@ -84,6 +84,10 @@ class LegacyRetrieverAdapter:
         return self.agent.last_entropy if self.agent else 0.0
 
     def index(self, documents: List[str]) -> None:
+        # ``index`` is a replacement operation.  Keeping documents from a
+        # previous call makes doc ids and the graph silently diverge from the
+        # caller's supplied corpus.
+        self.document_store = DocumentStore()
         self.document_store.add_many(documents)
         adjacency = build_similarity_graph(self.document_store.all())
         self.graph_store = GraphStore(adjacency)
@@ -105,6 +109,8 @@ class LegacyRetrieverAdapter:
         )
 
     def query(self, query_text: str, top_k: int = 5) -> dict:
+        if self.agent is None:
+            raise RuntimeError("index(documents)를 호출한 뒤 query()를 호출하세요.")
         final_answer, _trace = self.agent.run(query_text)
         verif_by_id = {v.doc_id: v for v in final_answer.verifications}
 

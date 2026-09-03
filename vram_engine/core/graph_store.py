@@ -12,17 +12,22 @@ import torch
 
 class GraphStore:
     def __init__(self, adjacency: torch.Tensor) -> None:
-        self._adjacency = self._validate_adjacency(adjacency)
+        # Keep the store as the sole owner of its mutable state.  Callers often
+        # retain the tensor used to initialise the store (for visualisation or
+        # rollback assertions), so sharing that storage would let them mutate
+        # the live graph without going through validation.
+        self._adjacency = self._validate_adjacency(adjacency).clone()
 
     def current(self) -> torch.Tensor:
-        return self._adjacency
+        """Return a snapshot of the current graph, not mutable backing storage."""
+        return self._adjacency.clone()
 
     def replace(self, adjacency: torch.Tensor) -> None:
         adjacency = self._validate_adjacency(adjacency)
         self._adjacency = adjacency.to(
             device=self._adjacency.device,
             dtype=self._adjacency.dtype,
-        )
+        ).clone()
 
     @property
     def size(self) -> int:
@@ -47,6 +52,8 @@ class GraphStore:
             raise ValueError("edge_weights must be one-dimensional")
         if not torch.isfinite(weights).all().item():
             raise ValueError("edge_weights must not contain NaN or Inf")
+        if (weights < 0).any().item() or (weights > 1).any().item():
+            raise ValueError("edge_weights must be between 0.0 and 1.0")
 
         aug = torch.eye(n + 1, device=self._adjacency.device, dtype=self._adjacency.dtype)
         aug[:n, :n] = self._adjacency
@@ -62,6 +69,12 @@ class GraphStore:
             raise ValueError("adjacency must be two-dimensional")
         if adjacency.size(0) != adjacency.size(1):
             raise ValueError("adjacency must be a square matrix")
+        if not adjacency.is_floating_point():
+            raise TypeError("adjacency must use a floating-point dtype")
         if not torch.isfinite(adjacency).all().item():
             raise ValueError("adjacency must not contain NaN or Inf")
+        if not torch.allclose(adjacency, adjacency.T):
+            raise ValueError("adjacency must be symmetric")
+        if (adjacency < 0).any().item():
+            raise ValueError("adjacency must not contain negative weights")
         return adjacency

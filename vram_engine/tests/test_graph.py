@@ -40,6 +40,15 @@ def test_graph_store_replace_preserves_canonical_dtype_and_device():
     assert gs.augmented_with([0.1, 0.2]).dtype == torch.float32
 
 
+def test_graph_store_current_returns_an_isolated_snapshot():
+    gs = GraphStore(torch.eye(2))
+    snapshot = gs.current()
+    snapshot[0, 1] = 0.75
+    snapshot[1, 0] = 0.75
+
+    assert torch.equal(gs.current(), torch.eye(2))
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
 def test_graph_store_normalizes_cuda_rollback_before_next_query():
     gs = GraphStore(torch.eye(2, dtype=torch.float32))
@@ -55,7 +64,10 @@ def test_graph_store_normalizes_cuda_rollback_before_next_query():
     [
         ([1.0], TypeError),
         (torch.ones(2, 3), ValueError),
+        (torch.eye(2, dtype=torch.int64), TypeError),
         (torch.tensor([[1.0, float("nan")], [0.0, 1.0]]), ValueError),
+        (torch.tensor([[1.0, 0.2], [0.3, 1.0]]), ValueError),
+        (torch.tensor([[1.0, -0.2], [-0.2, 1.0]]), ValueError),
     ],
 )
 def test_graph_store_rejects_invalid_adjacency(adjacency, error):
@@ -69,6 +81,10 @@ def test_graph_store_rejects_invalid_edge_weights():
         gs.augmented_with([0.1])
     with pytest.raises(ValueError, match="NaN"):
         gs.augmented_with([0.1, float("nan")])
+    with pytest.raises(ValueError, match="between"):
+        gs.augmented_with([-0.1, 0.2])
+    with pytest.raises(ValueError, match="between"):
+        gs.augmented_with([0.1, 1.1])
 
 
 def test_build_query_edge_weights_matches_jaccard():
